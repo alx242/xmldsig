@@ -1,0 +1,87 @@
+XMLDSIG for Erlang
+==================
+
+What is xmldsig?
+----------------
+
+tl;dr: By using private rsa keys and a x509 certificate a xml
+structure can be signed in a specified format and thus be transported
+and verfied by the receiving party to see that nothing has been
+tampered with.
+
+Or the long version: http://www.w3.org/TR/xmldsig-core/
+                     http://www.di-mgt.com.au/xmldsig.html
+
+How is the xml signed?
+----------------------
+
+The signature is a pre-specified format however the actual signature
+can exists in the xml in many different forms:
+
+* Evenloping signature
+* Enveloped signature
+* Detached signature
+
+Currently the implementation "probably" only supports a detached
+signature. This will be fixed...
+
+Generate a private rsa pem file
+-------------------------------
+
+`$> openssl genrsa -out mykey.pem 1024`
+
+Generate a certificate from a pem file
+--------------------------------------
+
+`$> openssl req -new -x509 -key mykey.pem -out cert.pem`
+
+Launch a erlang shell
+---------------------
+
+`$> make shell`
+
+Run tests
+---------
+
+Currently no common tests suites exists but the tests target is used
+to compile the eunit suite. So just run that target first and the fire
+up the eunit suite.
+
+`$> make tests`
+`$> make eunit`
+
+Try it out the app
+------------------
+
+Lets create a signature for a xml:
+
+```
+$erlang> Xml = "<xml>apapapapa<security></security>asdasd</xml>".
+$erlang> Rsa = xmldsig:read_private_rsa_pem_file("priv/mykey.pem").
+$erlang> X509 = xmldsig:read_cert_pem_file("priv/cert.pem").
+$erlang> Signature = xmldsig:create_signature(Xml, [], Rsa, X509).
+```
+
+Now lets verify that the signature is ok by pushing in the generated
+signature into the xml at a appropriate position:
+
+```
+$erlang> NewXml = "<xml>apapapapa<security>"++Signature++"</security>asdasd</xml>".
+$erlang> xmldsig:verify_sign(NewXml).
+ok
+```
+
+TODO
+----
+
+* Create support functions to push signature xml into specified
+  location
+
+* Make sure more variations of signatures are supported (enveloped and
+  enveloping are currently questionable).
+
+* Create eunit tests ;)
+
+* Fix new ways to remove xml-nodes
+
+* Support full canonicalization of xml
