@@ -12,7 +12,7 @@
 %%_* Tests =====================================================================
 sign_and_verify_test() ->
   Signature =  get_a_signature(
-                 "<xml>apapapapa<security></security>asdasd</xml>",)
+                 "<xml>apapapapa<security></security>asdasd</xml>"),
   NewXml    = "<xml>apapapapa<security>"++Signature++"</security>asdasd</xml>",
   ?assertEqual(ok, xmldsig:verify_sign(NewXml)).
 
