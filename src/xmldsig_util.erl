@@ -7,23 +7,18 @@
 
 %%_* Exports ===================================================================
 
--export([mpint/1, add_namespace/2, c14n/1]).
+-export([ add_namespace/2,
+          c14n/1,
+          key_value/1,
+          to_bin/1,
+          to_base64/1
+        ]).
 
 %%_* Includes ==================================================================
 
 -include_lib("xmerl/include/xmerl.hrl").
 
 %%_* API =======================================================================
-
--spec mpint(string() | binary()) -> binary().
-
-%% @doc Convert a string (raw xml data) and convert it to a
-%%      multi-precision integer. The first part of the binary (32
-%%      bits) reveals the size of the binary.
-mpint(String) when is_list(String)    ->
-  mpint(list_to_binary(String));
-mpint(Binary) when is_binary(Binary) ->
-  <<(size(Binary)):32/integer, Binary/binary>>.
 
 -spec add_namespace(string() | #xmlElement{}, string()) -> string().
 
@@ -53,6 +48,21 @@ add_namespace(#xmlElement{attributes=Attrs} = XmlElement, Namespace) ->
 c14n(Xml) ->
   {Element, _} = xmerl_scan:string(lists:flatten(Xml)),
   xmerl_ucs:to_utf8(lists:flatten(xmerl:export([Element], xmldsig_c14n))).
+
+to_bin(L) when is_list(L) ->
+  list_to_binary(L);
+to_bin(B) when is_binary(B) ->
+  B.
+
+to_base64(B) when is_binary(B) ->
+  to_base64(binary_to_list(B));
+to_base64(S) when is_list(S) ->
+  base64:encode_to_string(S).
+
+key_value(N) when is_integer(N) ->
+  key_value(ssh_bits:mpint(N));
+key_value(B) when is_binary(B) ->
+  binary:part(B, {4, byte_size(B) - 4}).
 
 %%%_* Emacs ====================================================================
 %%% Local Variables:
