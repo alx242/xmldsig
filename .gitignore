@@ -6,3 +6,5 @@ deps
 erl_crash.dump
 ebin
 deps
+_build/
+rebar.lock

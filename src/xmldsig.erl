@@ -27,6 +27,9 @@
 -include_lib("public_key/include/public_key.hrl").
 -include_lib("xmerl/include/xmerl.hrl").
 
+-define(SIGN_ALG, sha).    % sha
+-define(NS_ALG,   "sha1"). % sha1
+
 %%_* API =======================================================================
 
 -spec verify_sign(string()) -> ok | no_return().
@@ -78,14 +81,16 @@ create_signature(Xml, RSAPassword,
   #'RSAPrivateKey'{modulus=Modulus,              % N
                    publicExponent=PubExp,        % E
                    privateExponent=PrivateExp} = % D
-    public_key:pem_entry_decode(RSAEnc, [RSAPassword]),
-  RsaPrivateKey = [crypto:mpint(PubExp),
-                   crypto:mpint(Modulus),
-                   crypto:mpint(PrivateExp)],
+   public_key:pem_entry_decode(RSAEnc, [RSAPassword]),
+
+  RsaPrivateKey = [ xmldsig_util:key_value(PubExp),
+                    xmldsig_util:key_value(Modulus),
+                    xmldsig_util:key_value(PrivateExp)
+                  ],
+
   SignedInfo    = signed_info(Xml),
   SignatureElem = signature(SignedInfo, RsaPrivateKey, X509der),
-  lists:flatten(xmerl:export_simple([SignatureElem], xmerl_xml,
-                                    [{prolog, []}])).
+  to_xml([SignatureElem]).
 
 -spec read_private_rsa_pem_file(list()) ->
                                    tuple().
@@ -109,23 +114,29 @@ read_cert_pem_file(PemFile) ->
 read_pem(PemFile, Match) ->
   {ok, Bin}   = file:read_file(PemFile),
   AllData     = public_key:pem_decode(Bin),
-  MatchFun    = fun({Match, _, _}) -> true;
-                   (_Whatever)     -> false
+
+  MatchFun    = fun({Match1, _, _}) when Match1 =:= Match -> true;
+                   (_Whatever) -> false
                 end,
-  [Encoded|_] = lists:filter(MatchFun, AllData),
-  Encoded.
+  case lists:filter(MatchFun, AllData) of
+    [] ->
+      hd(AllData);
+    [Encoded | _] ->
+      Encoded
+  end.
 
 %% @doc Creates a simple xmerl xml structure of the <Signature> xml
 %%      structure according to xmldsig spec.
 signature(SignedInfo, RsaPrivateKey = [PubExp, Modulus, _], X509) ->
   SignedInfoXml  = xmerl:export_simple_content([SignedInfo], xmerl_xml),
+
   C14NSignedInfo = xmldsig_util:c14n(SignedInfoXml),
   SignatureValue = rm_unwanted(rsa_sha(C14NSignedInfo, RsaPrivateKey)),
-  ModulusB64     = rm_unwanted(base64:encode_to_string(
-                                 binary_to_list(Modulus))),
-  ExponentB64    = rm_unwanted(base64:encode_to_string(
-                                 binary_to_list(PubExp))),
-  X509B64        = rm_unwanted(base64:encode_to_string(X509)),
+
+  ModulusB64     = rm_unwanted(xmldsig_util:to_base64(Modulus)),
+  ExponentB64    = rm_unwanted(xmldsig_util:to_base64(PubExp)),
+  X509B64        = rm_unwanted(xmldsig_util:to_base64(X509)),
+
   {'Signature', [{xmlns, "http://www.w3.org/2000/09/xmldsig#"}],
    [SignedInfo,
     {'SignatureValue', [], [SignatureValue]},
@@ -138,12 +149,13 @@ signature(SignedInfo, RsaPrivateKey = [PubExp, Modulus, _], X509) ->
    ]}.
 
 signed_info(Xml) ->
-  Digest = rm_unwanted(digest(xmldsig_util:c14n(Xml), sha)),
+  Digest = rm_unwanted(digest(xmldsig_util:c14n(Xml), ?SIGN_ALG)),
+
   {'SignedInfo', [{xmlns, "http://www.w3.org/2000/09/xmldsig#"}],
    [{'CanonicalizationMethod',
      [{'Algorithm', "http://www.w3.org/2001/10/xml-exc-c14n#"}], []},
     {'SignatureMethod',
-     [{'Algorithm', "http://www.w3.org/2000/09/xmldsig#rsa-sha1"}], []},
+     [{'Algorithm', "http://www.w3.org/2000/09/xmldsig#rsa-" ++ ?NS_ALG}], []},
     {'Reference', [{'URI', ""}],
      [{'Transforms', [],
        [{'Transform',
@@ -155,7 +167,7 @@ signed_info(Xml) ->
        ]
       },
       {'DigestMethod', [{'Algorithm',
-                         "http://www.w3.org/2000/09/xmldsig#sha1"}], []},
+                         "http://www.w3.org/2000/09/xmldsig#" ++ ?NS_ALG}], []},
       {'DigestValue', [], [Digest]}
      ]}
    ]}.
@@ -163,9 +175,8 @@ signed_info(Xml) ->
 %% @doc Sign a data string using the private rsa key.
 %%      Key = [E,N,D]  E=PublicExponent N=PublicModulus  D=PrivateExponent
 rsa_sha(Data, RsaPrivateKey) ->
-  RsaBinary = crypto:rsa_sign(xmldsig_util:mpint(lists:flatten(Data)),
-                              RsaPrivateKey),
-  base64:encode_to_string(RsaBinary).
+  Payload = xmldsig_util:to_bin(lists:flatten(Data)),
+  xmldsig_util:to_base64(crypto:sign(rsa, ?SIGN_ALG, Payload, RsaPrivateKey)).
 
 %% @doc Do a two step verification of both the digest and the rsa
 %% signature.
@@ -183,16 +194,12 @@ do_verify(XmlElement, NoSignatureXml, Digest, SignatureXml, X509) ->
 %%      signature gets the same digest as what was found inside the
 %%      signature element.
 verify_digest(NoSignatureXml, Digest) ->
-  CanonicalXml = xmldsig_util:c14n(NoSignatureXml),
-  rm_unwanted(digest(CanonicalXml, sha)) =:= rm_unwanted(Digest).
+  CanonicalDigest = digest(xmldsig_util:c14n(NoSignatureXml), ?SIGN_ALG),
+  rm_unwanted(CanonicalDigest) =:= rm_unwanted(Digest).
 
 %% @doc Create a digest of chunk of data
-digest(Data, sha) -> base64:encode_to_string(crypto:sha(Data));
+digest(Data, ?SIGN_ALG) -> xmldsig_util:to_base64(crypto:hash(?SIGN_ALG, Data));
 digest(_,    _)   -> throw(unsupported_crypto_algorithm).
-
-%% @doc Remove whitespace characters, newlines, tabs...
-rm_unwanted(String) ->
-  re:replace(String, "\\s+", "", [global, {return, list}]).
 
 %% @doc Pulls out signature digest value and verifies that it is
 %%      correctly signed using the original data and the public key
@@ -204,12 +211,12 @@ verify_rsa(XmlElement, SignatureXmlNoNs, X509) ->
   SignatureXml     =
     xmldsig_util:add_namespace(SignatureXmlNoNs,
                                "http://www.w3.org/2000/09/xmldsig#"),
-  SignatureXmlBin  = xmldsig_util:mpint(xmldsig_util:c14n(SignatureXml)),
-  SignatureValBin  = xmldsig_util:mpint(base64:decode(SignatureValue)),
-  crypto:rsa_verify(SignatureXmlBin, SignatureValBin, RsaPubKey).
+  % NOTE: This converts string to binary
+  SignatureXmlBin  = xmldsig_util:to_bin(xmldsig_util:c14n(SignatureXml)),
+  SignatureValBin  = xmldsig_util:to_bin(base64:decode(SignatureValue)),
+  crypto:verify(rsa, sha, SignatureXmlBin, SignatureValBin, RsaPubKey).
 
--spec get_public_key_rsa(der_encoded()) -> list(binary()).
-
+-spec get_public_key_rsa(binary()) -> list(binary()).
 %% @doc Extract the public_key from a X509 certificate
 %%      Key = [E,N]  E=PublicExponent N=PublicModulusKey
 get_public_key_rsa(X509) ->
@@ -220,7 +227,16 @@ get_public_key_rsa(X509) ->
   #'RSAPublicKey'{modulus=N,
                   publicExponent=E}     =
     PublicKey#'OTPSubjectPublicKeyInfo'.subjectPublicKey,
-  [crypto:mpint(E), crypto:mpint(N)].
+  [xmldsig_util:key_value(E), xmldsig_util:key_value(N)].
+
+%% @doc Remove whitespace characters, newlines, tabs...
+rm_unwanted(String) ->
+  re:replace(String, "\\s+", "", [global, {return, list}]).
+
+to_xml(Elem) ->
+  lists:flatten(
+    xmerl:export_simple(Elem, xmerl_xml, [{prolog, []}])
+  ).
 
 %%%_* Emacs ====================================================================
 %%% Local Variables:
